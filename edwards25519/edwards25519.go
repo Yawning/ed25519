@@ -2126,7 +2126,7 @@ func ScReduce(out *[32]byte, s *[64]byte) {
 	out[31] = byte(s11 >> 17)
 }
 
-// AddEightBase adds 8x the Basepoint, useful for rapid key generation.
+// AddEightBase adds 8x the Basepoint, useful for vanity key generation.
 func AddEightBase(r *ExtendedGroupElement) {
 	var t CompletedGroupElement
 	geAdd(&t, r, &eightBase)

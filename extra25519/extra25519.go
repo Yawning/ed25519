@@ -156,6 +156,9 @@ func ScalarBaseMult(publicKey, representative, privateKey *[32]byte) bool {
 			var fixup [32]byte
 			binary.LittleEndian.PutUint64(fixup[0:8], incr*8)
 			scalarAdd(privateKey, &maskedPrivateKey, &fixup)
+			if (privateKey[0] & 248) != privateKey[0] || ((privateKey[31] & 127) | 64) != privateKey[31] {
+				continue
+			}
 		}
 
 		// Calculate r1 = sqrt(-u/(2*(u+A)))
