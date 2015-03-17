@@ -6,6 +6,7 @@ package extra25519
 
 import (
 	"crypto/sha512"
+	"encoding/binary"
 
 	"github.com/agl/ed25519/edwards25519"
 )
@@ -101,104 +102,113 @@ func ScalarBaseMult(publicKey, representative, privateKey *[32]byte) bool {
 	var A edwards25519.ExtendedGroupElement
 	edwards25519.GeScalarMultBase(&A, &maskedPrivateKey)
 
-	var inv1 edwards25519.FieldElement
-	edwards25519.FeSub(&inv1, &A.Z, &A.Y)
-	edwards25519.FeMul(&inv1, &inv1, &A.X)
-	edwards25519.FeInvert(&inv1, &inv1)
+	// So, this *can* fail, but it's extremely unlikely.
+	for incr := uint64(0); incr < 256; incr++ {
+		var inv1 edwards25519.FieldElement
+		edwards25519.FeSub(&inv1, &A.Z, &A.Y)
+		edwards25519.FeMul(&inv1, &inv1, &A.X)
+		edwards25519.FeInvert(&inv1, &inv1)
 
-	var t0, u edwards25519.FieldElement
-	edwards25519.FeMul(&u, &inv1, &A.X)
-	edwards25519.FeAdd(&t0, &A.Y, &A.Z)
-	edwards25519.FeMul(&u, &u, &t0)
+		var t0, u edwards25519.FieldElement
+		edwards25519.FeMul(&u, &inv1, &A.X)
+		edwards25519.FeAdd(&t0, &A.Y, &A.Z)
+		edwards25519.FeMul(&u, &u, &t0)
 
-	var v edwards25519.FieldElement
-	edwards25519.FeMul(&v, &t0, &inv1)
-	edwards25519.FeMul(&v, &v, &A.Z)
-	edwards25519.FeMul(&v, &v, &sqrtMinusA)
+		var v edwards25519.FieldElement
+		edwards25519.FeMul(&v, &t0, &inv1)
+		edwards25519.FeMul(&v, &v, &A.Z)
+		edwards25519.FeMul(&v, &v, &sqrtMinusA)
 
-	var b edwards25519.FieldElement
-	edwards25519.FeAdd(&b, &u, &edwards25519.A)
+		var b edwards25519.FieldElement
+		edwards25519.FeAdd(&b, &u, &edwards25519.A)
 
-	var c, b3, b8 edwards25519.FieldElement
-	edwards25519.FeSquare(&b3, &b)   // 2
-	edwards25519.FeMul(&b3, &b3, &b) // 3
-	edwards25519.FeSquare(&c, &b3)   // 6
-	edwards25519.FeMul(&c, &c, &b)   // 7
-	edwards25519.FeMul(&b8, &c, &b)  // 8
-	edwards25519.FeMul(&c, &c, &u)
-	q58(&c, &c)
+		var c, b3, b8 edwards25519.FieldElement
+		edwards25519.FeSquare(&b3, &b)   // 2
+		edwards25519.FeMul(&b3, &b3, &b) // 3
+		edwards25519.FeSquare(&c, &b3)   // 6
+		edwards25519.FeMul(&c, &c, &b)   // 7
+		edwards25519.FeMul(&b8, &c, &b)  // 8
+		edwards25519.FeMul(&c, &c, &u)
+		q58(&c, &c)
 
-	var chi edwards25519.FieldElement
-	edwards25519.FeSquare(&chi, &c)
-	edwards25519.FeSquare(&chi, &chi)
+		var chi edwards25519.FieldElement
+		edwards25519.FeSquare(&chi, &c)
+		edwards25519.FeSquare(&chi, &chi)
 
-	edwards25519.FeSquare(&t0, &u)
-	edwards25519.FeMul(&chi, &chi, &t0)
+		edwards25519.FeSquare(&t0, &u)
+		edwards25519.FeMul(&chi, &chi, &t0)
 
-	edwards25519.FeSquare(&t0, &b)   // 2
-	edwards25519.FeMul(&t0, &t0, &b) // 3
-	edwards25519.FeSquare(&t0, &t0)  // 6
-	edwards25519.FeMul(&t0, &t0, &b) // 7
-	edwards25519.FeSquare(&t0, &t0)  // 14
-	edwards25519.FeMul(&chi, &chi, &t0)
-	edwards25519.FeNeg(&chi, &chi)
+		edwards25519.FeSquare(&t0, &b)   // 2
+		edwards25519.FeMul(&t0, &t0, &b) // 3
+		edwards25519.FeSquare(&t0, &t0)  // 6
+		edwards25519.FeMul(&t0, &t0, &b) // 7
+		edwards25519.FeSquare(&t0, &t0)  // 14
+		edwards25519.FeMul(&chi, &chi, &t0)
+		edwards25519.FeNeg(&chi, &chi)
 
-	var chiBytes [32]byte
-	edwards25519.FeToBytes(&chiBytes, &chi)
-	// chi[1] is either 0 or 0xff
-	if chiBytes[1] == 0xff {
-		return false
+		var chiBytes [32]byte
+		edwards25519.FeToBytes(&chiBytes, &chi)
+		// chi[1] is either 0 or 0xff
+		if chiBytes[1] == 0xff {
+			edwards25519.AddEightBase(&A)
+			continue
+		} else if incr > 0 {
+			var fixup [32]byte
+			binary.LittleEndian.PutUint64(fixup[0:8], incr*8)
+			scalarAdd(privateKey, &maskedPrivateKey, &fixup)
+		}
+
+		// Calculate r1 = sqrt(-u/(2*(u+A)))
+		var r1 edwards25519.FieldElement
+		edwards25519.FeMul(&r1, &c, &u)
+		edwards25519.FeMul(&r1, &r1, &b3)
+		edwards25519.FeMul(&r1, &r1, &sqrtMinusHalf)
+
+		var maybeSqrtM1 edwards25519.FieldElement
+		edwards25519.FeSquare(&t0, &r1)
+		edwards25519.FeMul(&t0, &t0, &b)
+		edwards25519.FeAdd(&t0, &t0, &t0)
+		edwards25519.FeAdd(&t0, &t0, &u)
+
+		edwards25519.FeOne(&maybeSqrtM1)
+		edwards25519.FeCMove(&maybeSqrtM1, &edwards25519.SqrtM1, edwards25519.FeIsNonZero(&t0))
+		edwards25519.FeMul(&r1, &r1, &maybeSqrtM1)
+
+		// Calculate r = sqrt(-(u+A)/(2u))
+		var r edwards25519.FieldElement
+		edwards25519.FeSquare(&t0, &c)   // 2
+		edwards25519.FeMul(&t0, &t0, &c) // 3
+		edwards25519.FeSquare(&t0, &t0)  // 6
+		edwards25519.FeMul(&r, &t0, &c)  // 7
+
+		edwards25519.FeSquare(&t0, &u)   // 2
+		edwards25519.FeMul(&t0, &t0, &u) // 3
+		edwards25519.FeMul(&r, &r, &t0)
+
+		edwards25519.FeSquare(&t0, &b8)   // 16
+		edwards25519.FeMul(&t0, &t0, &b8) // 24
+		edwards25519.FeMul(&t0, &t0, &b)  // 25
+		edwards25519.FeMul(&r, &r, &t0)
+		edwards25519.FeMul(&r, &r, &sqrtMinusHalf)
+
+		edwards25519.FeSquare(&t0, &r)
+		edwards25519.FeMul(&t0, &t0, &u)
+		edwards25519.FeAdd(&t0, &t0, &t0)
+		edwards25519.FeAdd(&t0, &t0, &b)
+		edwards25519.FeOne(&maybeSqrtM1)
+		edwards25519.FeCMove(&maybeSqrtM1, &edwards25519.SqrtM1, edwards25519.FeIsNonZero(&t0))
+		edwards25519.FeMul(&r, &r, &maybeSqrtM1)
+
+		var vBytes [32]byte
+		edwards25519.FeToBytes(&vBytes, &v)
+		vInSquareRootImage := feBytesLE(&vBytes, &halfQMinus1Bytes)
+		edwards25519.FeCMove(&r, &r1, vInSquareRootImage)
+
+		edwards25519.FeToBytes(publicKey, &u)
+		edwards25519.FeToBytes(representative, &r)
+		return true
 	}
-
-	// Calculate r1 = sqrt(-u/(2*(u+A)))
-	var r1 edwards25519.FieldElement
-	edwards25519.FeMul(&r1, &c, &u)
-	edwards25519.FeMul(&r1, &r1, &b3)
-	edwards25519.FeMul(&r1, &r1, &sqrtMinusHalf)
-
-	var maybeSqrtM1 edwards25519.FieldElement
-	edwards25519.FeSquare(&t0, &r1)
-	edwards25519.FeMul(&t0, &t0, &b)
-	edwards25519.FeAdd(&t0, &t0, &t0)
-	edwards25519.FeAdd(&t0, &t0, &u)
-
-	edwards25519.FeOne(&maybeSqrtM1)
-	edwards25519.FeCMove(&maybeSqrtM1, &edwards25519.SqrtM1, edwards25519.FeIsNonZero(&t0))
-	edwards25519.FeMul(&r1, &r1, &maybeSqrtM1)
-
-	// Calculate r = sqrt(-(u+A)/(2u))
-	var r edwards25519.FieldElement
-	edwards25519.FeSquare(&t0, &c)   // 2
-	edwards25519.FeMul(&t0, &t0, &c) // 3
-	edwards25519.FeSquare(&t0, &t0)  // 6
-	edwards25519.FeMul(&r, &t0, &c)  // 7
-
-	edwards25519.FeSquare(&t0, &u)   // 2
-	edwards25519.FeMul(&t0, &t0, &u) // 3
-	edwards25519.FeMul(&r, &r, &t0)
-
-	edwards25519.FeSquare(&t0, &b8)   // 16
-	edwards25519.FeMul(&t0, &t0, &b8) // 24
-	edwards25519.FeMul(&t0, &t0, &b)  // 25
-	edwards25519.FeMul(&r, &r, &t0)
-	edwards25519.FeMul(&r, &r, &sqrtMinusHalf)
-
-	edwards25519.FeSquare(&t0, &r)
-	edwards25519.FeMul(&t0, &t0, &u)
-	edwards25519.FeAdd(&t0, &t0, &t0)
-	edwards25519.FeAdd(&t0, &t0, &b)
-	edwards25519.FeOne(&maybeSqrtM1)
-	edwards25519.FeCMove(&maybeSqrtM1, &edwards25519.SqrtM1, edwards25519.FeIsNonZero(&t0))
-	edwards25519.FeMul(&r, &r, &maybeSqrtM1)
-
-	var vBytes [32]byte
-	edwards25519.FeToBytes(&vBytes, &v)
-	vInSquareRootImage := feBytesLE(&vBytes, &halfQMinus1Bytes)
-	edwards25519.FeCMove(&r, &r1, vInSquareRootImage)
-
-	edwards25519.FeToBytes(publicKey, &u)
-	edwards25519.FeToBytes(representative, &r)
-	return true
+	return false
 }
 
 // q58 calculates out = z^((p-5)/8).
@@ -306,6 +316,22 @@ func chi(out, z *edwards25519.FieldElement) {
 		edwards25519.FeSquare(&t1, &t1)
 	}
 	edwards25519.FeMul(out, &t1, &t0) // 253..4,2,1
+}
+
+func scalarAdd(r, x, y *[32]byte) {
+	var v [32]uint32
+	var carry uint32
+	for i := range v {
+		v[i] = uint32(x[i]) + uint32(y[i])
+	}
+	for i := 0; i < 31; i++ {
+		carry = v[i] >> 8
+		v[i+1] += carry
+		v[i] &= 0xff
+	}
+	for i, j := range v {
+		r[i] = byte(j)
+	}
 }
 
 // RepresentativeToPublicKey converts a uniform representative value for a

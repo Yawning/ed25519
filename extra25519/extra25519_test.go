@@ -9,8 +9,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"code.google.com/p/go.crypto/curve25519"
 	"github.com/agl/ed25519"
+	"golang.org/x/crypto/curve25519"
 )
 
 func TestCurve25519Conversion(t *testing.T) {
@@ -36,7 +36,7 @@ func TestElligator(t *testing.T) {
 		rand.Reader.Read(privateKey[:])
 
 		if !ScalarBaseMult(&publicKey, &representative, &privateKey) {
-			continue
+			t.Fatal("The ScalarBaseMult function failed.")
 		}
 		RepresentativeToPublicKey(&publicKey2, &representative)
 		if !bytes.Equal(publicKey[:], publicKey2[:]) {
@@ -52,18 +52,14 @@ func TestElligator(t *testing.T) {
 
 func BenchmarkKeyGeneration(b *testing.B) {
 	var publicKey, representative, privateKey [32]byte
-	
-	// Find the private key that results in a point that's in the image of the map.
-	for {
-		rand.Reader.Read(privateKey[:])
-		if ScalarBaseMult(&publicKey, &representative, &privateKey) {
-			break
-		}
-	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ScalarBaseMult(&publicKey, &representative, &privateKey);
+		found := false
+		for !found {
+			rand.Reader.Read(privateKey[:])
+			found = ScalarBaseMult(&publicKey, &representative, &privateKey)
+		}
 	}
 }
 
@@ -73,6 +69,6 @@ func BenchmarkMap(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		RepresentativeToPublicKey(&publicKey, &representative);
+		RepresentativeToPublicKey(&publicKey, &representative)
 	}
 }
